@@ -26,7 +26,6 @@ jobs:
           distribution: 'temurin'
 
       - name: Build with Maven
-        working-directory: ./Ledger-API/Ledger-API
         run: mvn clean package -DskipTests
 
       - name: Log in to GitHub Container Registry
