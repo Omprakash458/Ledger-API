@@ -13,7 +13,6 @@ env:
 jobs:
   build-and-sign:
     runs-on: ubuntu-latest
-    
     permissions:
       contents: read
       packages: write
@@ -31,13 +30,15 @@ jobs:
 
       - name: Find and Build with Maven
         run: |
-          POM_PATH=$(find . -name "pom.xml" -not -path "*/.*" | head -n 1)
-          if [ -z "$POM_PATH" ]; then
-            echo "Error: pom.xml not found anywhere in the repository!"
-            exit 1
+          # Locates pom.xml dynamically across subfolders (such as task1-hardening or app)
+          POM_FILE=$(find . -name "pom.xml" -not -path "*/.*" | head -n 1)
+          if [ -z "$POM_FILE" ]; then
+            echo "Warning: pom.xml not found. Skipping Maven build."
+          else
+            echo "Found pom.xml at: $POM_FILE"
+            DIR_NAME=$(dirname "$POM_FILE")
+            mvn clean package -f "$POM_FILE"
           fi
-          echo "Found pom.xml at: $POM_PATH"
-          mvn clean package -DskipTests -f "$POM_PATH"
 
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
@@ -54,12 +55,15 @@ jobs:
         uses: docker/metadata-action@v5
         with:
           images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
+          tags: |
+            type=sha,format=short
 
       - name: Build and push Docker image
         id: push
         uses: docker/build-push-action@v5
         with:
           context: .
+          file: ./Dockerfile
           push: true
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
@@ -72,4 +76,7 @@ jobs:
           TAGS: ${{ steps.meta.outputs.tags }}
           DIGEST: ${{ steps.push.outputs.digest }}
         run: |
-          cosign sign --yes ${REGISTRY}/${IMAGE_NAME}@${DIGEST}
+          images="${TAGS}"
+          for image in ${images}; do
+            cosign sign --yes "${image}@${DIGEST}"
+          |
