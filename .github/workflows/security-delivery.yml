@@ -5,6 +5,7 @@ on:
     branches: [ main ]
   pull_request:
     branches: [ main ]
+  workflow_dispatch:
 
 permissions:
   contents: read
@@ -24,6 +25,7 @@ jobs:
         with:
           java-version: '17'
           distribution: 'temurin'
+          cache: 'maven'
 
       - name: Build with Maven
         run: mvn clean package -DskipTests
@@ -52,7 +54,9 @@ jobs:
           labels: ${{ steps.meta.outputs.labels }}
 
       - name: Install Cosign
-        uses: sigstore/cosign-installer@v3.5.0
+        uses: sigstore/cosign-installer@v3
+        with:
+          cosign-release: 'v2.2.4'
 
       - name: Sign the published Docker image
         env:
@@ -62,4 +66,14 @@ jobs:
           images="${TAGS}"
           for image in ${images}; do
             cosign sign --yes "${image}@${DIGEST}"
+          done
+
+      - name: Generate and Sign Provenance Attestation
+        env:
+          TAGS: ${{ steps.meta.outputs.tags }}
+          DIGEST: ${{ steps.push.outputs.digest }}
+        run: |
+          images="${TAGS}"
+          for image in ${images}; do
+            cosign attest --yes --type slsaprovenance --predicate ${{ github.workspace }}/.github/workflows/security-delivery.yml "${image}@${DIGEST}"
           done
