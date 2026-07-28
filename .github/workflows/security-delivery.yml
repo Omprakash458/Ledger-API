@@ -26,16 +26,8 @@ jobs:
           distribution: 'temurin'
 
       - name: Build with Maven
-        run: |
-          POM_FILE=$(find . -name "pom.xml" -not -path "*/.*" -print -quit)
-          if [ -z "$POM_FILE" ]; then
-            echo "Error: pom.xml not found!"
-            exit 1
-          fi
-          POM_DIR=$(dirname "$POM_FILE")
-          echo "Building from directory: $POM_DIR"
-          cd "$POM_DIR"
-          mvn clean package -DskipTests
+        working-directory: ./Ledger-API/Ledger-API
+        run: mvn clean package -DskipTests
 
       - name: Log in to GitHub Container Registry
         uses: docker/login-action@v3
