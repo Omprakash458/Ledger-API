@@ -27,14 +27,7 @@ jobs:
 
       - name: Build with Maven
         run: |
-          POM_FILE=$(find . -name "pom.xml" -not -path "*/.*" -print -quit)
-          if [ -z "$POM_FILE" ]; then
-            echo "Error: pom.xml not found anywhere in the workspace!"
-            exit 1
-          fi
-          POM_DIR=$(dirname "$POM_FILE")
-          echo "Found pom.xml in directory: $POM_DIR"
-          cd "$POM_DIR"
+          cd Ledger-API
           mvn clean package -DskipTests
 
       - name: Log in to GitHub Container Registry
