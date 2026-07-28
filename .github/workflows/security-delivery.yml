@@ -2,61 +2,35 @@ name: Security and Delivery Pipeline
 
 on:
   push:
-    branches: [ "main" ]
+    branches: [ main ]
   pull_request:
-    branches: [ "main" ]
+    branches: [ main ]
 
-env:
-  REGISTRY: ghcr.io
-  IMAGE_NAME: ${{ github.repository }}
+permissions:
+  contents: read
+  packages: write
+  id-token: write
+  security-events: write
 
 jobs:
-  build-and-sign:
+  build-and-secure:
     runs-on: ubuntu-latest
-    permissions:
-      contents: read
-      packages: write
-      id-token: write
-
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      - name: Set up JDK 17
-        uses: actions/setup-java@v4
-        with:
-          distribution: 'temurin'
-          java-version: '17'
-
-      - name: Find and Build with Maven
-        run: |
-          # Locates pom.xml dynamically across subfolders (such as task1-hardening or app)
-          POM_FILE=$(find . -name "pom.xml" -not -path "*/.*" | head -n 1)
-          if [ -z "$POM_FILE" ]; then
-            echo "Warning: pom.xml not found. Skipping Maven build."
-          else
-            echo "Found pom.xml at: $POM_FILE"
-            DIR_NAME=$(dirname "$POM_FILE")
-            mvn clean package -f "$POM_FILE"
-          fi
-
-      - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v3
-
-      - name: Log in to the Container Registry
+      - name: Log in to GitHub Container Registry
         uses: docker/login-action@v3
         with:
-          registry: ${{ env.REGISTRY }}
+          registry: ghcr.io
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Extract metadata (tags, labels) for Docker
+      - name: Extract Docker metadata
         id: meta
         uses: docker/metadata-action@v5
         with:
-          images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
-          tags: |
-            type=sha,format=short
+          images: ghcr.io/${{ github.repository }}
 
       - name: Build and push Docker image
         id: push
@@ -71,7 +45,7 @@ jobs:
       - name: Install Cosign
         uses: sigstore/cosign-installer@v3.5.0
 
-- name: Sign the published Docker image
+      - name: Sign the published Docker image
         env:
           TAGS: ${{ steps.meta.outputs.tags }}
           DIGEST: ${{ steps.push.outputs.digest }}
