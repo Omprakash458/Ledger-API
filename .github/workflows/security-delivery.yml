@@ -123,7 +123,7 @@ jobs:
         run: |
          pwd
           ls -la
-          find . -name "*.sarif
+          find . -name "*.sarif"
           if [ -f trivy-results.sarif ]; then
             echo "SARIF found"
             else
