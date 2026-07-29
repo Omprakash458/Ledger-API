@@ -7,7 +7,7 @@ metadata:
 
 spec:
   selector:
-    app: ledger-api
+    app: ledger-api-green
 
   ports:
   - port: 80

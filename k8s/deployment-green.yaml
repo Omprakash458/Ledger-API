@@ -1,0 +1,26 @@
+---
+apiVersion: apps/v1
+kind: Deployment
+
+metadata:
+  name: ledger-api-green
+
+spec:
+  replicas: 2
+
+  selector:
+    matchLabels:
+      app: ledger-api-green
+
+  template:
+    metadata:
+      labels:
+        app: ledger-api-green
+
+    spec:
+      containers:
+      - name: ledger-api
+        image: ghcr.io/omprakash458/ledger-api:latest
+        imagePullPolicy: Always
+        ports:
+        - containerPort: 5000
