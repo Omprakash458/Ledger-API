@@ -15,21 +15,32 @@ permissions:
 
 jobs:
   build-and-secure:
+
     runs-on: ubuntu-latest
 
     steps:
+
       - name: Checkout Repository
         uses: actions/checkout@v4
 
+
+      ####################################################
+      # Secrets Scan
+      ####################################################
       - name: Run Gitleaks
         uses: gitleaks/gitleaks-action@v2
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
+
+      ####################################################
+      # Python Setup
+      ####################################################
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
           python-version: "3.12"
+
 
       - name: Install Dependencies
         run: |
@@ -38,29 +49,39 @@ jobs:
             pip install -r requirements.txt
           fi
 
+
+      ####################################################
+      # SAST Scan
+      ####################################################
       - name: Install Semgrep
         run: pip install semgrep
+
 
       - name: Run Semgrep
         run: |
           semgrep scan \
-            --config auto \
-            --sarif \
-            --output semgrep.sarif
+          --config auto \
+          --sarif \
+          --output semgrep.sarif
+
 
       - name: Upload Semgrep SARIF
         uses: github/codeql-action/upload-sarif@v3
         with:
           sarif_file: semgrep.sarif
 
+
+
       ####################################################
-      # Create lowercase image name
+      # Image Name
       ####################################################
       - name: Set Image Name
         id: image
         run: |
           IMAGE=$(echo "ghcr.io/${{ github.repository }}" | tr '[:upper:]' '[:lower:]')
           echo "image=$IMAGE" >> $GITHUB_OUTPUT
+
+
 
       ####################################################
       # Login GHCR
@@ -72,8 +93,10 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
+
+
       ####################################################
-      # Build Image
+      # Build Image With SHA Tag
       ####################################################
       - name: Build Docker Image
         uses: docker/build-push-action@v5
@@ -81,88 +104,42 @@ jobs:
           context: .
           file: ./Dockerfile
           load: true
-          tags: ${{ steps.image.outputs.image }}:latest
+          tags: |
+            ${{ steps.image.outputs.image }}:${{ github.sha }}
+
+
 
       ####################################################
-      # Trivy
+      # Image Scan
       ####################################################
-      - name: Run Trivy
+      - name: Run Trivy Image Scan
         uses: aquasecurity/trivy-action@master
         with:
-          image-ref: ${{ steps.image.outputs.image }}:latest
+          image-ref: ${{ steps.image.outputs.image }}:${{ github.sha }}
           format: sarif
           output: trivy-results.sarif
           severity: CRITICAL,HIGH
           exit-code: "0"
 
-      - name: Verify Trivy Report
-        run: |
-          pwd
-          ls -la
-          find . -name "*.sarif"
+
 
       - name: Upload Trivy SARIF
         if: hashFiles('trivy-results.sarif') != ''
-        uses: github/codeql-action/upload-sarif@v4
+        uses: github/codeql-action/upload-sarif@v3
         with:
           sarif_file: trivy-results.sarif
 
+
+
       ####################################################
-      # Push Image
+      # Push Image To GHCR
       ####################################################
       - name: Push Docker Image
-        id: push
+        id: push-image
         uses: docker/build-push-action@v5
         with:
           context: .
+          file: ./Dockerfile
           push: true
-          tags: ${{ steps.image.outputs.image }}:latest
-
-      ####################################################
-      # Install Cosign
-      ####################################################
-      - name: Install Cosign
-        uses: sigstore/cosign-installer@v3
-        with:
-          cosign-release: v2.2.4
-
-      ####################################################
-      # Sign Image
-      ####################################################
-      - name: Sign Docker Image
-        env:
-          IMAGE: ${{ steps.image.outputs.image }}:latest
-          DIGEST: ${{ steps.push.outputs.digest }}
-        run: |
-          cosign sign --yes ${IMAGE}@${DIGEST}
-
-      ####################################################
-      # Predicate
-      ####################################################
-      - name: Create Predicate
-        run: |
-          cat > predicate.json <<EOF
-          {
-            "buildType":"https://github.com/actions",
-            "builder":{
-              "id":"${{ github.server_url }}/${{ github.repository }}"
-            },
-            "metadata":{
-              "buildInvocationID":"${{ github.run_id }}"
-            }
-          }
-          EOF
-
-      ####################################################
-      # Attestation
-      ####################################################
-      - name: Attest Image
-        env:
-          IMAGE: ${{ steps.image.outputs.image }}:latest
-          DIGEST: ${{ steps.push.outputs.digest }}
-        run: |
-          cosign attest \
-            --yes \
-            --type slsaprovenance \
-            --predicate predicate.json \
-            ${IMAGE}@${DIGEST}
+          tags: |
+            ${{ steps.image.outputs.image }}:${{ github.sha }}
