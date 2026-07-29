@@ -20,7 +20,7 @@ spec:
     spec:
       containers:
       - name: ledger-api
-        image: ledger-api:latest
-        imagePullPolicy: Never
+        image: ghcr.io/omprakash458/ledger-api:latest
+        imagePullPolicy: Always
         ports:
         - containerPort: 5000
