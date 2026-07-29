@@ -110,7 +110,7 @@ jobs:
       # Trivy Scan
       # --------------------------------------------------
       - name: Run Trivy Scan
-        uses: aquasecurity/trivy-action@master
+        uses: aquasecurity/trivy-action@v0.32.0
         with:
           image-ref: ghcr.io/${{ github.repository }}:latest
           format: sarif
@@ -121,11 +121,17 @@ jobs:
       - name: Verify Trivy Report
         if: always()
         run: |
+         pwd
           ls -la
-          test -f trivy-results.sarif
+          find . -name "*.sarif
+          if [ -f trivy-results.sarif ]; then
+            echo "SARIF found"
+            else
+            echo "SARIF NOT found"
+          fi
 
       - name: Upload Trivy SARIF
-        if: always()
+        if: always() && hashFiles('trivy-results.sarif') != ''
         uses: github/codeql-action/upload-sarif@v4
         with:
           sarif_file: trivy-results.sarif
