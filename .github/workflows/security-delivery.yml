@@ -1,128 +1,211 @@
 name: Security and Delivery Pipeline
 
 on:
-  push:
-    branches: [ main ]
-  pull_request:
-    branches: [ main ]
-  workflow_dispatch:
+push:
+branches:
+- main
+pull_request:
+branches:
+- main
+workflow_dispatch:
 
 permissions:
-  contents: read
-  packages: write
-  id-token: write
-  security-events: write # Required for uploading SARIF results to Security tab
+contents: read
+packages: write
+id-token: write
+security-events: write
 
 jobs:
-  build-and-secure:
-    runs-on: ubuntu-latest
-    steps:
-      - name: Checkout repository
-        uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
+build-and-secure:
+runs-on: ubuntu-latest
 
-      # --- GATE 1: SECRETS SCANNING ---
-      - name: Run Gitleaks (Secrets Scan)
-        uses: gitleaks/gitleaks-action@v2
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          GITLEAKS_LICENSE: ""
+```
+steps:
+  # ----------------------------
+  # Checkout
+  # ----------------------------
+  - name: Checkout repository
+    uses: actions/checkout@v4
+    with:
+      fetch-depth: 0
 
-      # --- GATE 2: SAST ---
-      - name: Run Semgrep SAST
-        uses: semgrep/semgrep-action@v1
-        with:
-          config: auto
-          generate-sarif: "true"
-          sarif_file: semgrep.sarif
+  # ----------------------------
+  # Gate 1: Secrets Scanning
+  # ----------------------------
+  - name: Run Gitleaks
+    uses: gitleaks/gitleaks-action@v2
+    env:
+      GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Upload Semgrep SARIF Report
-        uses: github/codeql-action/upload-sarif@v4
-        if: always()
-        with:
-          sarif_file: semgrep.sarif
+  # ----------------------------
+  # Gate 2: SAST (Semgrep)
+  # ----------------------------
+  - name: Set up Python
+    uses: actions/setup-python@v5
+    with:
+      python-version: '3.x'
 
-      - name: Set up JDK 17
-        uses: actions/setup-java@v4
-        with:
-          java-version: '17'
-          distribution: 'temurin'
+  - name: Install Semgrep
+    run: pip install semgrep
 
-      - name: Build with Maven
-        run: mvn clean package -DskipTests
+  - name: Run Semgrep Scan
+    run: |
+      semgrep scan \
+        --config auto \
+        --sarif \
+        --output semgrep.sarif
 
-      - name: Log in to GitHub Container Registry
-        uses: docker/login-action@v3
-        with:
-          registry: ghcr.io
-          username: ${{ github.actor }}
-          password: ${{ secrets.GITHUB_TOKEN }}
+  - name: Verify Semgrep SARIF
+    if: always()
+    run: |
+      ls -lah
+      test -f semgrep.sarif && echo 'Semgrep SARIF found'
 
-      - name: Extract Docker metadata
-        id: meta
-        uses: docker/metadata-action@v5
-        with:
-          images: ghcr.io/${{ github.repository }}
+  - name: Upload Semgrep SARIF Report
+    uses: github/codeql-action/upload-sarif@v4
+    if: always()
+    with:
+      sarif_file: semgrep.sarif
 
-      # Build image locally first so we can scan it BEFORE pushing
-      - name: Build Docker image (Local Load)
-        uses: docker/build-push-action@v5
-        with:
-          context: .
-          file: ./Dockerfile
-          load: true
-          tags: ${{ steps.meta.outputs.tags }}
-          labels: ${{ steps.meta.outputs.labels }}
+  # ----------------------------
+  # Build Application
+  # ----------------------------
+  - name: Set up JDK 17
+    uses: actions/setup-java@v4
+    with:
+      java-version: '17'
+      distribution: 'temurin'
 
-      # --- GATE 3: CONTAINER VULNERABILITY SCAN ---
-      - name: Run Trivy Vulnerability Scanner
-        uses: aquasecurity/trivy-action@master
-        with:
-          image-ref: '${{ steps.meta.outputs.tags }}'
-          format: 'sarif'
-          output: 'trivy-results.sarif'
-          severity: 'CRITICAL,HIGH'
-          exit-code: '1' # Hard-block build if CRITICAL or HIGH CVEs found
+  - name: Build with Maven
+    run: mvn clean package -DskipTests
 
-      - name: Upload Trivy SARIF Report
-        uses: github/codeql-action/upload-sarif@v4
-        if: always()
-        with:
-          sarif_file: trivy-results.sarif
+  # ----------------------------
+  # Docker Login
+  # ----------------------------
+  - name: Log in to GitHub Container Registry
+    uses: docker/login-action@v3
+    with:
+      registry: ghcr.io
+      username: ${{ github.actor }}
+      password: ${{ secrets.GITHUB_TOKEN }}
 
-      # --- PUSH IMAGE (Only runs if all security gates pass) ---
-      - name: Push Docker image to GHCR
-        id: push
-        uses: docker/build-push-action@v5
-        with:
-          context: .
-          file: ./Dockerfile
-          push: true
-          tags: ${{ steps.meta.outputs.tags }}
-          labels: ${{ steps.meta.outputs.labels }}
+  # ----------------------------
+  # Docker Metadata
+  # ----------------------------
+  - name: Extract Docker metadata
+    id: meta
+    uses: docker/metadata-action@v5
+    with:
+      images: ghcr.io/${{ github.repository }}
 
-      - name: Install Cosign
-        uses: sigstore/cosign-installer@v3
-        with:
-          cosign-release: 'v2.2.4'
+  # ----------------------------
+  # Build Docker image locally
+  # ----------------------------
+  - name: Build Docker image (local)
+    uses: docker/build-push-action@v5
+    with:
+      context: .
+      file: ./Dockerfile
+      load: true
+      tags: ghcr.io/${{ github.repository }}:latest
+      labels: ${{ steps.meta.outputs.labels }}
 
-      - name: Sign the published Docker image
-        env:
-          TAGS: ${{ steps.meta.outputs.tags }}
-          DIGEST: ${{ steps.push.outputs.digest }}
-        run: |
-          images="${TAGS}"
-          for image in ${images}; do
-            cosign sign --yes "${image}@${DIGEST}"
-          done
+  # ----------------------------
+  # Gate 3: Trivy Vulnerability Scan
+  # ----------------------------
+  - name: Run Trivy Vulnerability Scanner
+    uses: aquasecurity/trivy-action@0.24.0
+    with:
+      image-ref: ghcr.io/${{ github.repository }}:latest
+      format: sarif
+      output: trivy-results.sarif
+      severity: CRITICAL,HIGH
+      exit-code: 0
 
-      - name: Generate and Sign Provenance Attestation
-        env:
-          TAGS: ${{ steps.meta.outputs.tags }}
-          DIGEST: ${{ steps.push.outputs.digest }}
-        run: |
-          images="${TAGS}"
-          for image in ${images}; do
-            cosign attest --yes --type slsaprovenance --predicate ${{ github.workspace }}/.github/workflows/security-delivery.yml "${image}@${DIGEST}"
-          done
+  - name: Verify Trivy SARIF
+    if: always()
+    run: |
+      ls -lah
+      test -f trivy-results.sarif && echo 'Trivy SARIF found'
+
+  - name: Upload Trivy SARIF Report
+    uses: github/codeql-action/upload-sarif@v4
+    if: always()
+    with:
+      sarif_file: trivy-results.sarif
+
+  # Fail build if HIGH/CRITICAL vulnerabilities exist
+  - name: Fail if HIGH/CRITICAL vulnerabilities found
+    run: |
+      if grep -q '"level":"error"' trivy-results.sarif; then
+        echo 'High or Critical vulnerabilities detected'
+        exit 1
+      fi
+
+  # ----------------------------
+  # Push Docker image
+  # ----------------------------
+  - name: Push Docker image
+    id: push
+    uses: docker/build-push-action@v5
+    with:
+      context: .
+      file: ./Dockerfile
+      push: true
+      tags: |
+        ghcr.io/${{ github.repository }}:latest
+      labels: ${{ steps.meta.outputs.labels }}
+
+  # ----------------------------
+  # Install Cosign
+  # ----------------------------
+  - name: Install Cosign
+    uses: sigstore/cosign-installer@v3
+    with:
+      cosign-release: v2.2.4
+
+  # ----------------------------
+  # Sign Image
+  # ----------------------------
+  - name: Sign Docker image
+    env:
+      IMAGE: ghcr.io/${{ github.repository }}:latest
+      DIGEST: ${{ steps.push.outputs.digest }}
+    run: |
+      cosign sign --yes ${IMAGE}@${DIGEST}
+
+  # ----------------------------
+  # Generate SLSA Provenance Attestation
+  # ----------------------------
+  - name: Generate provenance predicate
+    run: |
+      cat <<EOF > predicate.json
+      {
+        "buildType": "https://github.com/Attestations/GitHubActionsWorkflow@v1",
+        "builder": {
+          "id": "https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+        },
+        "invocation": {
+          "configSource": {
+            "uri": "git+https://github.com/${{ github.repository }}.git",
+            "digest": {
+              "sha1": "${{ github.sha }}"
+            }
+          }
+        },
+        "metadata": {
+          "buildInvocationID": "${{ github.run_id }}"
+        }
+      }
+      EOF
+
+  - name: Attest image provenance
+    env:
+      IMAGE: ghcr.io/${{ github.repository }}:latest
+      DIGEST: ${{ steps.push.outputs.digest }}
+    run: |
+      cosign attest --yes \
+        --type slsaprovenance \
+        --predicate predicate.json \
+        ${IMAGE}@${DIGEST}
+```
