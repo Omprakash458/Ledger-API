@@ -1,0 +1,26 @@
+---
+apiVersion: apps/v1
+kind: Deployment
+
+metadata:
+  name: ledger-api
+
+spec:
+  replicas: 2
+
+  selector:
+    matchLabels:
+      app: ledger-api
+
+  template:
+    metadata:
+      labels:
+        app: ledger-api
+
+    spec:
+      containers:
+      - name: ledger-api
+        image: ledger-api:latest
+        imagePullPolicy: Never
+        ports:
+        - containerPort: 5000

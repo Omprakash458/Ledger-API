@@ -3,7 +3,7 @@ kind: Application
 
 metadata:
   name: ledger-api
-
+  namespace: argocd
 spec:
   project: default
 
