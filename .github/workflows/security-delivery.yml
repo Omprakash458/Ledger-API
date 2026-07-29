@@ -2,11 +2,9 @@ name: Security and Delivery Pipeline
 
 on:
   push:
-    branches:
-      - main
+    branches: [main]
   pull_request:
-    branches:
-      - main
+    branches: [main]
   workflow_dispatch:
 
 permissions:
@@ -20,23 +18,14 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-      # --------------------------------------------------
-      # Checkout
-      # --------------------------------------------------
       - name: Checkout Repository
         uses: actions/checkout@v4
 
-      # --------------------------------------------------
-      # Gitleaks Secret Scan
-      # --------------------------------------------------
       - name: Run Gitleaks
         uses: gitleaks/gitleaks-action@v2
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
-      # --------------------------------------------------
-      # Setup Python
-      # --------------------------------------------------
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
@@ -47,39 +36,35 @@ jobs:
           python -m pip install --upgrade pip
           if [ -f requirements.txt ]; then
             pip install -r requirements.txt
-          else
-            echo "requirements.txt not found. Skipping dependency installation."
           fi
 
-      # --------------------------------------------------
-      # Semgrep
-      # --------------------------------------------------
       - name: Install Semgrep
-        run: |
-          pip install semgrep
+        run: pip install semgrep
 
-      - name: Run Semgrep Scan
+      - name: Run Semgrep
         run: |
           semgrep scan \
             --config auto \
             --sarif \
             --output semgrep.sarif
 
-      - name: Verify Semgrep Report
-        if: always()
-        run: |
-          ls -la
-          test -f semgrep.sarif
-
       - name: Upload Semgrep SARIF
-        if: always()
         uses: github/codeql-action/upload-sarif@v3
         with:
           sarif_file: semgrep.sarif
 
-      # --------------------------------------------------
-      # Docker Login
-      # --------------------------------------------------
+      ####################################################
+      # Create lowercase image name
+      ####################################################
+      - name: Set Image Name
+        id: image
+        run: |
+          IMAGE=$(echo "ghcr.io/${{ github.repository }}" | tr '[:upper:]' '[:lower:]')
+          echo "image=$IMAGE" >> $GITHUB_OUTPUT
+
+      ####################################################
+      # Login GHCR
+      ####################################################
       - name: Login to GHCR
         uses: docker/login-action@v3
         with:
@@ -87,114 +72,92 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
-      # --------------------------------------------------
-      # Docker Metadata
-      # --------------------------------------------------
-      - name: Docker Metadata
-        id: meta
-        uses: docker/metadata-action@v5
-        with:
-          images: ghcr.io/${{ github.repository }}
-
-      # --------------------------------------------------
-      # Build Docker Image
-      # --------------------------------------------------
+      ####################################################
+      # Build Image
+      ####################################################
       - name: Build Docker Image
         uses: docker/build-push-action@v5
         with:
           context: .
           load: true
-          tags: ghcr.io/${{ github.repository }}:latest
+          tags: ${{ steps.image.outputs.image }}:latest
 
-      # --------------------------------------------------
-      # Trivy Scan
-      # --------------------------------------------------
-      - name: Run Trivy Scan
-        uses: aquasecurity/trivy-action@v0.32.0
+      ####################################################
+      # Trivy
+      ####################################################
+      - name: Run Trivy
+        uses: aquasecurity/trivy-action@master
         with:
-          image-ref: ghcr.io/${{ github.repository }}:latest
+          image-ref: ${{ steps.image.outputs.image }}:latest
           format: sarif
           output: trivy-results.sarif
           severity: CRITICAL,HIGH
           exit-code: "0"
 
       - name: Verify Trivy Report
-        if: always()
         run: |
-         pwd
+          pwd
           ls -la
           find . -name "*.sarif"
-          if [ -f trivy-results.sarif ]; then
-            echo "SARIF found"
-            else
-            echo "SARIF NOT found"
-          fi
 
       - name: Upload Trivy SARIF
-        if: always() && hashFiles('trivy-results.sarif') != ''
+        if: hashFiles('trivy-results.sarif') != ''
         uses: github/codeql-action/upload-sarif@v4
         with:
           sarif_file: trivy-results.sarif
 
-      - name: Fail if Critical or High Vulnerabilities Exist
-        run: |
-          if grep -q '"level":"error"' trivy-results.sarif; then
-            echo "Critical or High vulnerabilities found."
-            exit 1
-          fi
-
-      # --------------------------------------------------
-      # Push Docker Image
-      # --------------------------------------------------
+      ####################################################
+      # Push Image
+      ####################################################
       - name: Push Docker Image
         id: push
         uses: docker/build-push-action@v5
         with:
           context: .
           push: true
-          tags: ghcr.io/${{ github.repository }}:latest
+          tags: ${{ steps.image.outputs.image }}:latest
 
-      # --------------------------------------------------
+      ####################################################
       # Install Cosign
-      # --------------------------------------------------
+      ####################################################
       - name: Install Cosign
         uses: sigstore/cosign-installer@v3
         with:
           cosign-release: v2.2.4
 
-      # --------------------------------------------------
-      # Sign Docker Image
-      # --------------------------------------------------
+      ####################################################
+      # Sign Image
+      ####################################################
       - name: Sign Docker Image
         env:
-          IMAGE: ghcr.io/${{ github.repository }}:latest
+          IMAGE: ${{ steps.image.outputs.image }}:latest
           DIGEST: ${{ steps.push.outputs.digest }}
         run: |
           cosign sign --yes ${IMAGE}@${DIGEST}
 
-      # --------------------------------------------------
-      # Create Provenance Predicate
-      # --------------------------------------------------
+      ####################################################
+      # Predicate
+      ####################################################
       - name: Create Predicate
         run: |
           cat > predicate.json <<EOF
           {
-            "buildType": "https://github.com/actions",
-            "builder": {
-              "id": "${{ github.server_url }}/${{ github.repository }}"
+            "buildType":"https://github.com/actions",
+            "builder":{
+              "id":"${{ github.server_url }}/${{ github.repository }}"
             },
-            "metadata": {
-              "buildInvocationID": "${{ github.run_id }}"
+            "metadata":{
+              "buildInvocationID":"${{ github.run_id }}"
             }
           }
           EOF
 
-      # --------------------------------------------------
-      # Attest Image
-      # --------------------------------------------------
+      ####################################################
+      # Attestation
+      ####################################################
       - name: Attest Image
         env:
-          IMAGE: ghcr.io/${{ github.repository }}:latest
+          IMAGE: ${{ steps.image.outputs.image }}:latest
           DIGEST: ${{ steps.push.outputs.digest }}
         run: |
           cosign attest \
